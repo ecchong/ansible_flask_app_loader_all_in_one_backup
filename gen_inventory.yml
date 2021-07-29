@@ -1,0 +1,61 @@
+---
+- name: Pull inventory info from openstack
+  hosts: localhost
+  gather_facts: no
+
+  tasks:
+  - name: Gather openstack servers
+    os_server_info:
+      cloud: openstack
+      filters:
+        vm_state: active
+    register: os_status
+
+  - name: Add host
+    add_host:
+      name: "{{ item.name }}"
+      groups: "{{ item.metadata.group }}"
+      ansible_user: cloud-user
+      ansible_host: "{{ item.public_v4 }}"
+      ansible_ssh_private_key_file: "~/.ssh/openstack.pem"
+    loop: "{{ os_status.openstack_servers }}"
+    loop_control:
+      label: "{{ item.name }}"
+
+- name: Fix instances
+  hosts: database_servers,load_balancers,app_servers
+
+  vars:
+    repo_files:
+    - src: base_repos
+      dest: base_repos.repo
+    - src: database_repos
+      dest: database_repos.repo
+
+  tasks:
+  - name: Assert only one database server is active
+    assert:
+      that:
+        - groups['database_servers'] | length == 1
+      fail_msg: "Only one database_server is allowed"
+      success_msg: "Only one database_server found, proceeding"
+
+  - name: Copy file with owner and permissions
+    ansible.builtin.copy:
+      src: "{{ item.src }}"
+      dest: "/etc/yum.repos.d/{{ item.dest }}"
+      owner: root
+      group: root
+      mode: '0644'
+    loop: "{{ repo_files }}"
+    become: yes
+
+  - name: Update /etc/hosts to fix DNS issue
+    template:
+      src: etc_hosts.j2
+      dest: /etc/hosts
+      owner: root
+      group: root
+      mode: '0644'
+      backup: yes
+    become: yes
